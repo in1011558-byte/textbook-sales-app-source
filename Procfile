@@ -4,4 +4,3 @@ Your branch is ahead of 'origin/main' by 4 commits.
   (use "git push" to publish your local commits)
 nothing to commit, working tree clean
 ubuntu@sandbox:~/textbook-sales-app-source $
-
