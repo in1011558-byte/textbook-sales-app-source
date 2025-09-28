@@ -1,62 +1,87 @@
-import os
-from flask import Flask, send_from_directory, jsonify
+from flask import Flask, request, jsonify
+from flask_sqlalchemy import SQLAlchemy
+from flask_login import LoginManager, UserMixin, login_user, logout_user, login_required, current_user
 from flask_bcrypt import Bcrypt
-from .shared_db import db
-from .models.user import User
+import os
 
-# Blueprintのインポート
-from .routes.auth import auth_bp
-from .routes.textbook import textbook_bp
-from .routes.cart import cart_bp
-from .routes.order import order_bp
+db = SQLAlchemy()
+bcrypt = Bcrypt()
 
-# Flaskアプリケーションのセットアップ
-app = Flask(__name__, static_folder='../../frontend/build', static_url_path='/')
-bcrypt = Bcrypt(app)
+class User(UserMixin, db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    username = db.Column(db.String(100), unique=True, nullable=False)
+    password_hash = db.Column(db.String(128))
 
-# 設定
-database_url = os.environ.get('DATABASE_URL')
-if database_url and database_url.startswith("postgres://"):
-    database_url = database_url.replace("postgres://", "postgresql://", 1)
+    def set_password(self, password):
+        self.password_hash = bcrypt.generate_password_hash(password).decode('utf-8')
 
-app.config['SQLALCHEMY_DATABASE_URI'] = database_url or 'sqlite:///default.db'
-app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
-app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'a_default_secret_key')
+    def check_password(self, password):
+        return bcrypt.check_password_hash(self.password_hash, password)
 
-# データベースとアプリケーションの初期化
-db.init_app(app)
+def create_app():
+    app = Flask(__name__)
+    app.config['SECRET_KEY'] = os.environ.get('SECRET_KEY', 'a-very-secret-key')
+    # DATABASE_URLのプロトコルをHerokuが要求するものに置換
+    db_url = os.environ.get('DATABASE_URL')
+    if db_url and db_url.startswith("postgres://"):
+        db_url = db_url.replace("postgres://", "postgresql://", 1)
+    app.config['SQLALCHEMY_DATABASE_URI'] = db_url
+    app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
 
-# Blueprintの登録
-app.register_blueprint(auth_bp, url_prefix='/api/auth')
-app.register_blueprint(textbook_bp, url_prefix='/api/textbooks')
-app.register_blueprint(cart_bp, url_prefix='/api/cart')
-app.register_blueprint(order_bp, url_prefix='/api/orders')
+    db.init_app(app)
+    bcrypt.init_app(app)
 
-# データベーステーブルの作成と管理者ユーザーの追加
-with app.app_context():
-    db.create_all()
-    if not User.query.filter_by(username='admin').first():
-        hashed_password = bcrypt.generate_password_hash('admin').decode('utf-8')
-        admin_user = User(username='admin', password=hashed_password, is_admin=True)
-        db.session.add(admin_user)
+    login_manager = LoginManager()
+    login_manager.init_app(app)
+
+    @login_manager.user_loader
+    def load_user(user_id):
+        return User.query.get(int(user_id))
+
+    @app.route('/')
+    def index():
+        # Herokuのウェルカムページではなく、このメッセージが表示されれば成功
+        return "<h1>Flask Application Deployed!</h1><p>Use /init_db to initialize the database, and /register to create a user.</p>"
+
+    @app.cli.command('init-db')
+    def init_db_command():
+        """Creates the database tables."""
+        db.create_all()
+        print('Initialized the database.')
+
+    @app.route('/register', methods=['POST'])
+    def register():
+        data = request.get_json()
+        if not data:
+            return jsonify({"message": "No input data provided"}), 400
+        username = data.get('username')
+        password = data.get('password')
+        if User.query.filter_by(username=username).first():
+            return jsonify({"message": "User already exists"}), 400
+        
+        new_user = User(username=username)
+        new_user.set_password(password)
+        db.session.add(new_user)
         db.session.commit()
+        return jsonify({"message": f"User {username} registered successfully"}), 201
 
-# Reactフロントエンドのルーティング
-@app.route('/', defaults={'path': ''})
-@app.route('/<path:path>')
-def serve(path):
-    if path != "" and os.path.exists(os.path.join(app.static_folder, path)):
-        return send_from_directory(app.static_folder, path)
-    else:
-        return send_from_directory(app.static_folder, 'index.html')
+    return app
 
-# エラーハンドリング
-@app.errorhandler(404)
-def not_found(e):
-    # APIリクエストの場合はJSONを、それ以外はindex.htmlを返す
-    if request.path.startswith('/api/'):
-        return jsonify(error='Not Found'), 404
-    return send_from_directory(app.static_folder, 'index.html')
+app = create_app()
 
-if __name__ == '__main__':
-    app.run(debug=True)
+
+
+
+
+@app.route(\"/init_db_and_user\")
+def init_db_and_user():
+    db.create_all()
+    username = \'S85073\'
+    password = \'87073\'
+    if not User.query.filter_by(username=username).first():
+        new_user = User(username=username)
+        new_user.set_password(password)
+        db.session.add(new_user)
+        db.session.commit()
+        return f\'Database initialized and user {username} created!\'
+    return \'Database already initialized or user already exists!\'
